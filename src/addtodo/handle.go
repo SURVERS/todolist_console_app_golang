@@ -129,14 +129,12 @@ func HandleLoad(pool *pgxpool.Pool) error {
 	return nil
 }
 
-func HandleAdd(args []string, pool *pgxpool.Pool) error {
+func HandleAdd(args string, pool *pgxpool.Pool) error {
 	if len(args) == 0 {
 		return fmt.Errorf("ошибка: Необходимо ввести описание задачи. Пример: add Купить хлеб")
 	}
-
-	description := strings.Join(args, " ")
 	query := `INSERT INTO todolist (description, completed) VALUES ($1, $2)`
-	_, err := pool.Exec(context.Background(), query, description, false)
+	_, err := pool.Exec(context.Background(), query, args, false)
 
 	if err != nil {
 		return fmt.Errorf("ошибка при создании задания. %w", err)
@@ -144,7 +142,7 @@ func HandleAdd(args []string, pool *pgxpool.Pool) error {
 
 	newTask := models.Task{
 		ID:          models.NextID,
-		Description: description,
+		Description: args,
 		Completed:   false,
 	}
 

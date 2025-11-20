@@ -5,24 +5,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	addtodo "todolist-app/src/addtodo"
+	"todolist-app/src/api/handle"
 	"todolist-app/src/models"
 
+	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
 var pool *pgxpool.Pool
 
-type Task struct {
-	ID          int
-	Description string
-	Completed   bool
-}
-
-var tasks []Task
 var allCommands = "Доступные команды:\nadd [текст] - Добавляет новую задачу\nlist - Посмотреть список задач\nchecked [ID-задачи] - Установить статус *Выполнена задача*\ndelete [ID-Задачи] - Удалить задачу по его ID\nexit - Выйти из программы"
 
 func main() {
@@ -32,6 +29,7 @@ func main() {
 	}
 
 	connectUrl := os.Getenv("DATABASE_URL")
+	server_port := os.Getenv("PORT")
 
 	ctx := context.Background()
 
@@ -47,32 +45,79 @@ func main() {
 		log.Fatalf("Не удалось проверить подключение к базе данных: %s", errsql)
 	}
 
-	// Загружаем TodoList в структуру TodoList который находится в models.go
-	addtodo.HandleLoad(pool)
-	for i, todo := range models.Tasks {
-		fmt.Printf("%d %s ID: %d\n", i, todo.Description, todo.ID)
-	}
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	fmt.Println("📝 ToDo List Console App")
-	fmt.Println("---------------------------")
-	fmt.Println(allCommands)
+	go func() {
+		defer wg.Done()
 
-	scanner := bufio.NewScanner(os.Stdin)
+		router := mux.NewRouter()
+		router.HandleFunc("/add/{todo}", todoAdd)
+		router.HandleFunc("/delete/{id:[0-9]+}", todoDelete)
+		router.HandleFunc("/checked/{id:[0-9]+}", todoChecked)
+		router.HandleFunc("/list", todoList).Methods("POST")
+		http.Handle("/", router)
 
-	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
-			break
+		fmt.Printf("Сервер http://localhost%s был успешно запущен!\n\n", server_port)
+		if err := http.ListenAndServe(server_port, nil); err != nil {
+			log.Fatalf("сервер не смог запуститься. Ошибка: %s", err)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		addtodo.HandleLoad(pool)
+		for i, todo := range models.Tasks {
+			fmt.Printf("%d %s ID: %d\n", i, todo.Description, todo.ID)
 		}
 
-		input := strings.TrimSpace(scanner.Text())
+		fmt.Println("📝 ToDo List Console App")
+		fmt.Println("---------------------------")
+		fmt.Println(allCommands)
 
-		if input == "" {
-			continue
+		scanner := bufio.NewScanner(os.Stdin)
+
+		for {
+			fmt.Print("> ")
+			if !scanner.Scan() {
+				break
+			}
+
+			input := strings.TrimSpace(scanner.Text())
+
+			if input == "" {
+				continue
+			}
+
+			processCommand(input)
 		}
+	}()
+	wg.Wait()
+}
 
-		processCommand(input)
-	}
+func todoList(w http.ResponseWriter, r *http.Request) {
+	handle.HandleList(w)
+}
+
+func todoChecked(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	handle.HandleChecked(id, pool, w)
+}
+
+func todoAdd(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	todo := vars["todo"]
+
+	handle.HandleAdd(todo, pool, w)
+}
+
+func todoDelete(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	id := vars["id"]
+
+	handle.HandleDelete(id, pool, w)
 }
 
 func processCommand(text string) {
@@ -81,10 +126,11 @@ func processCommand(text string) {
 	command := parts[0]
 
 	args := parts[1:]
+	description := strings.Join(args, " ")
 
 	switch command {
 	case "add":
-		addtodo.HandleAdd(args, pool)
+		addtodo.HandleAdd(description, pool)
 	case "list":
 		addtodo.HandleList()
 	case "checked":
